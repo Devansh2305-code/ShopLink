@@ -4,9 +4,9 @@ const mongoose = require('mongoose');
 const ProductSchema = new mongoose.Schema({
     shopId: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'ShopOwner', // Links to the ShopOwner collection
+        ref: 'ShopOwner',
         required: true,
-        index: true 
+        index: true
     },
     name: {
         type: String,
@@ -14,9 +14,14 @@ const ProductSchema = new mongoose.Schema({
         trim: true
     },
     description: {
-        type: String
+        type: String,
+        required: true
     },
-    price: { // Selling Price
+    category: { // New explicit category field for flexible input logic
+        type: String,
+        required: true
+    },
+    price: {
         type: Number,
         required: true,
         min: 0.01
@@ -29,8 +34,16 @@ const ProductSchema = new mongoose.Schema({
     stockQuantity: {
         type: Number,
         required: true,
-        default: 0,
         min: 0
+    },
+    // Flexible details field: Stores category-specific attributes (e.g., { sizes: 'S, M, L', fabric: 'Cotton' })
+    details: { 
+        type: Object,
+        default: {}
+    },
+    createdAt: {
+        type: Date,
+        default: Date.now
     }
 });
 
