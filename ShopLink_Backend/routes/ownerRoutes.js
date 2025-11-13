@@ -1,315 +1,234 @@
 const express = require('express');
 const router = express.Router();
-const mongoose = require('mongoose');
-
-// Mongoose Models
-const Product = require('../models/Product');
-const Order = require('../models/Order');
+const mongoose = require('mongoose'); // Needed for ObjectId in aggregation
+const authMiddleware = require('../middleware/auth');
+const Product = require('../models/Product'); 
+const Order = require('../models/Order');     
 const ShopOwner = require('../models/ShopOwner');
-const Customer = require('../models/Customer');
 
-// Middleware for authentication and authorization
-const auth = require('../middleware/auth');
+// Apply middleware: ALL routes in this file require an authenticated token
+router.use(authMiddleware); 
 
-// --- PRODUCT MANAGEMENT (CRUD) ---
+// Middleware to ensure the user is a shop owner
+const isOwner = (req, res, next) => {
+    if (req.user.type !== 'owner') {
+        return res.status(403).json({ message: "Forbidden: This resource is for Shop Owners only." });
+    }
+    next();
+};
+
+router.use(isOwner);
+
+// --- BEGIN SHOP OWNER ROUTES: PRODUCT MANAGEMENT (CRUD) ---
 
 // Endpoint: GET /api/owner/products - View all products for the logged-in shop
-router.get('/products', auth, async (req, res) => {
-    // Ensure only Shop Owners can access this route
-    if (req.user.type !== 'owner') {
-        return res.status(403).json({ message: 'Access denied. Must be a shop owner.' });
-    }
-
+router.get('/products', async (req, res) => {
     try {
-        const products = await Product.find({ shopId: req.user.id });
-        res.json(products);
+        const shopId = req.user.id; 
+        const products = await Product.find({ shopId }).sort({ name: 1 });
+
+        res.json({ success: true, count: products.length, products });
     } catch (error) {
-        console.error("GET Products Error:", error.message);
-        res.status(500).json({ message: 'Server error retrieving products.' });
+        console.error('Error fetching products:', error);
+        res.status(500).json({ message: "Server error fetching products." });
     }
 });
 
 // Endpoint: POST /api/owner/products - Add a new product
-router.post('/products', auth, async (req, res) => {
-    if (req.user.type !== 'owner') {
-        return res.status(403).json({ message: 'Access denied.' });
-    }
-
+router.post('/products', async (req, res) => {
     try {
-        const { name, description, price, costPrice, stockQuantity, category, details } = req.body;
+        const { name, description, price, costPrice, stockQuantity } = req.body;
+        const shopId = req.user.id;
 
-        // Basic validation
-        if (!name || !description || !price || costPrice === undefined || !stockQuantity || !category) {
-            return res.status(400).json({ message: 'Missing required product fields.' });
-        }
-        
-        // Ensure price validation
-        if (price <= 0 || costPrice < 0 || stockQuantity < 0) {
-            return res.status(400).json({ message: 'Price, cost, and stock must be valid positive numbers.' });
+        if (!name || !price || !costPrice || stockQuantity === undefined) {
+             return res.status(400).json({ message: "Missing required product fields." });
         }
 
-        const product = new Product({
-            shopId: req.user.id,
+        const newProduct = new Product({
+            shopId,
             name,
             description,
             price,
             costPrice,
-            stockQuantity,
-            category,
-            // Save the flexible details object, which can be {} or contain size, fabric, etc.
-            details: details || {}
+            stockQuantity: stockQuantity
         });
 
-        await product.save();
-        res.status(201).json({ message: 'Product added successfully.', product });
+        await newProduct.save();
+        res.status(201).json({ success: true, message: "Product added successfully.", product: newProduct });
     } catch (error) {
-        console.error("POST Product Error:", error.message);
-        res.status(500).json({ message: 'Server error adding product.' });
+        console.error('Error adding product:', error);
+        res.status(400).json({ message: "Failed to add product. Check data validity." });
     }
 });
 
-// Endpoint: PUT /api/owner/products/:id - Update product details (including costPrice and flexible details)
-router.put('/products/:id', auth, async (req, res) => {
-    if (req.user.type !== 'owner') {
-        return res.status(403).json({ message: 'Access denied.' });
-    }
-
+// Endpoint: PUT /api/owner/products/:id - Update product details or stock
+router.put('/products/:id', async (req, res) => {
     try {
-        const { name, description, price, costPrice, stockQuantity, category, details } = req.body;
         const productId = req.params.id;
+        const shopId = req.user.id;
+        const updates = req.body;
 
-        // Construct update object based on provided fields
-        const updates = {};
-        if (name !== undefined) updates.name = name;
-        if (description !== undefined) updates.description = description;
-        if (price !== undefined) updates.price = price;
-        if (costPrice !== undefined) updates.costPrice = costPrice; // Crucial for cost update
-        if (stockQuantity !== undefined) updates.stockQuantity = stockQuantity;
-        if (category !== undefined) updates.category = category;
-        if (details !== undefined) updates.details = details; // Crucial for flexible details update
-
+        // Find and ensure the product belongs to the logged-in shop owner
         const product = await Product.findOneAndUpdate(
-            { _id: productId, shopId: req.user.id }, // Find by ID AND ensure it belongs to the logged-in owner
+            { _id: productId, shopId: shopId },
             { $set: updates },
-            { new: true, runValidators: true } // Return the updated document and run Mongoose validation
+            { new: true, runValidators: true }
         );
 
         if (!product) {
-            return res.status(404).json({ message: 'Product not found or access denied.' });
+            return res.status(404).json({ message: "Product not found or does not belong to this shop." });
         }
 
-        res.json({ message: 'Product updated successfully.', product });
+        res.json({ success: true, message: "Product updated successfully.", product });
     } catch (error) {
-        console.error("PUT Product Error:", error.message);
-        res.status(500).json({ message: 'Server error updating product.' });
+        console.error('Error updating product:', error);
+        res.status(400).json({ message: "Failed to update product. Check data validity." });
     }
 });
 
 // Endpoint: DELETE /api/owner/products/:id - Delete a product
-router.delete('/products/:id', auth, async (req, res) => {
-    if (req.user.type !== 'owner') {
-        return res.status(403).json({ message: 'Access denied.' });
-    }
-
+router.delete('/products/:id', async (req, res) => {
     try {
         const productId = req.params.id;
+        const shopId = req.user.id;
 
-        const result = await Product.findOneAndDelete({
-            _id: productId,
-            shopId: req.user.id
-        });
+        const result = await Product.findOneAndDelete({ _id: productId, shopId: shopId });
 
         if (!result) {
-            return res.status(404).json({ message: 'Product not found or access denied.' });
+            return res.status(404).json({ message: "Product not found or does not belong to this shop." });
         }
 
-        res.json({ message: 'Product deleted successfully.' });
+        res.json({ success: true, message: "Product deleted successfully." });
     } catch (error) {
-        console.error("DELETE Product Error:", error.message);
-        res.status(500).json({ message: 'Server error deleting product.' });
+        console.error('Error deleting product:', error);
+        res.status(500).json({ message: "Server error deleting product." });
     }
 });
 
-// --- ORDER MANAGEMENT ---
+
+// --- BEGIN SHOP OWNER ROUTES: ORDER & ANALYTICS ---
 
 // Endpoint: GET /api/owner/orders - View all orders for the shop
-router.get('/orders', auth, async (req, res) => {
-    if (req.user.type !== 'owner') {
-        return res.status(403).json({ message: 'Access denied. Must be a shop owner.' });
-    }
-
+router.get('/orders', async (req, res) => {
     try {
-        // Find orders related to the logged-in shop owner
-        const orders = await Order.find({ shopId: req.user.id })
-            .sort({ orderDate: -1 }) // Sort newest first
-            .lean(); // Use lean() for faster retrieval since we are modifying the output
-
-        // 1. Get unique customer IDs from the orders
-        const customerIds = orders.map(order => order.customerId);
+        const shopId = req.user.id;
         
-        // 2. Fetch customer details
-        const customers = await Customer.find({ _id: { $in: customerIds } }, 'name phone');
+        // Fetch orders and populate customer data (name and phone)
+        const orders = await Order.find({ shopId })
+            .populate('customerId', 'name phone') 
+            .sort({ orderDate: -1 });
+            
+        // Map to format the output for cleaner use in the frontend
+        const formattedOrders = orders.map(order => ({
+            _id: order._id,
+            orderDate: order.orderDate,
+            status: order.status,
+            totalAmount: order.totalAmount,
+            items: order.items,
+            customerName: order.customerId ? order.customerId.name : 'Unknown',
+            customerContact: order.customerId ? order.customerId.phone : 'N/A'
+        }));
 
-        // Map customer details for easy lookup
-        const customerMap = new Map();
-        customers.forEach(c => customerMap.set(c._id.toString(), c));
-
-        // 3. Attach customer details to orders (Required for the report)
-        const ordersWithCustomerInfo = orders.map(order => {
-            const customerInfo = customerMap.get(order.customerId.toString());
-            return {
-                ...order,
-                customerName: customerInfo ? customerInfo.name : 'N/A',
-                customerPhone: customerInfo ? customerInfo.phone : 'N/A'
-            };
-        });
-
-        res.json(ordersWithCustomerInfo);
+        res.json({ success: true, orders: formattedOrders, message: "Orders list fetched successfully." });
     } catch (error) {
-        console.error("GET Orders Error:", error.message);
-        res.status(500).json({ message: 'Server error retrieving orders.' });
+        console.error('Error fetching orders:', error);
+        res.status(500).json({ message: "Server error fetching orders." });
     }
 });
 
 // Endpoint: PUT /api/owner/orders/:id/status - Update order status
-router.put('/orders/:id/status', auth, async (req, res) => {
-    if (req.user.type !== 'owner') {
-        return res.status(403).json({ message: 'Access denied.' });
-    }
-
+router.put('/orders/:id/status', async (req, res) => {
     try {
-        const { status } = req.body;
         const orderId = req.params.id;
-
-        if (!status || !['Pending', 'Processing', 'Shipped', 'Delivered', 'Cancelled'].includes(status)) {
-            return res.status(400).json({ message: 'Invalid status provided.' });
-        }
+        const shopId = req.user.id;
+        const { status } = req.body; // Expects status: 'Processing', 'Shipped', etc.
 
         const order = await Order.findOneAndUpdate(
-            { _id: orderId, shopId: req.user.id }, // Find by ID AND owner
-            { $set: { status } },
-            { new: true }
+            { _id: orderId, shopId: shopId },
+            { $set: { status: status } },
+            { new: true, runValidators: true }
         );
 
         if (!order) {
-            return res.status(404).json({ message: 'Order not found or access denied.' });
+            return res.status(404).json({ message: "Order not found or does not belong to this shop." });
         }
 
-        res.json({ message: `Order status updated to ${status}.`, order });
+        res.json({ success: true, message: `Order status updated to ${order.status}`, order });
     } catch (error) {
-        console.error("PUT Order Status Error:", error.message);
-        res.status(500).json({ message: 'Server error updating order status.' });
+        console.error('Error updating order status:', error);
+        res.status(400).json({ message: "Failed to update order status." });
     }
 });
 
 
-// --- ANALYTICS (Sales & Profit) ---
-
-// Endpoint: GET /api/owner/analytics/sales - Monthly profit/sales analysis
-router.get('/analytics/sales', auth, async (req, res) => {
-    if (req.user.type !== 'owner') {
-        return res.status(403).json({ message: 'Access denied.' });
-    }
-
+// Analytics: GET /api/owner/analytics/sales - Monthly profit/sales analysis
+router.get('/analytics/sales', async (req, res) => {
     try {
-        // MongoDB Aggregation Pipeline for Monthly Sales Analysis
-        const analysis = await Order.aggregate([
-            // 1. Filter orders for the logged-in shop and only delivered status
-            { $match: { 
-                shopId: new mongoose.Types.ObjectId(req.user.id),
-                status: 'Delivered'
-            }},
+        const shopId = mongoose.Types.ObjectId(req.user.id);
 
-            // 2. Deconstruct the items array to calculate values per item
-            { $unwind: "$items" },
-
-            // 3. Calculate metrics for each item line
-            { $addFields: {
-                revenue: { $multiply: ["$items.quantity", "$items.sellingPrice"] },
-                costOfGoods: { $multiply: ["$items.quantity", "$items.costPrice"] },
-                month: { $month: "$orderDate" },
-                year: { $year: "$orderDate" }
-            }},
-
-            // 4. Group by Month and Year to calculate totals
-            { $group: {
-                _id: { month: "$month", year: "$year" },
-                totalRevenue: { $sum: "$revenue" },
-                totalCost: { $sum: "$costOfGoods" },
-                count: { $sum: 1 }
-            }},
-
-            // 5. Calculate Profit
-            { $addFields: {
-                totalProfit: { $subtract: ["$totalRevenue", "$totalCost"] }
-            }},
-
-            // 6. Sort results by year and month (latest first)
-            { $sort: { "_id.year": -1, "_id.month": -1 } }
+        const sales = await Order.aggregate([
+            { $match: { shopId: shopId, status: "Delivered" } }, // Only analyze completed sales
+            { $unwind: "$items" }, // Deconstruct the items array
+            {
+                $group: {
+                    _id: {
+                        month: { $month: "$orderDate" },
+                        year: { $year: "$orderDate" }
+                    },
+                    totalRevenue: { $sum: { $multiply: ["$items.sellingPrice", "$items.quantity"] } },
+                    totalProfit: { $sum: { $multiply: ["$items.quantity", { $subtract: ["$items.sellingPrice", "$items.costPrice"] }] } },
+                    totalItemsSold: { $sum: "$items.quantity" }
+                }
+            },
+            { $sort: { "_id.year": 1, "_id.month": 1 } }
         ]);
 
-        res.json(analysis);
-
+        res.json({ success: true, sales, message: "Monthly sales analysis fetched." });
     } catch (error) {
-        console.error("Analytics Sales Error:", error.message);
-        res.status(500).json({ message: 'Server error retrieving sales analytics.' });
+        console.error('Error fetching sales analytics:', error);
+        res.status(500).json({ message: "Server error fetching sales analytics." });
     }
 });
 
-// Endpoint: GET /api/owner/analytics/details - Details of products sold (with customer data)
-router.get('/analytics/details', auth, async (req, res) => {
-    if (req.user.type !== 'owner') {
-        return res.status(403).json({ message: 'Access denied.' });
-    }
 
+// Analytics: GET /api/owner/analytics/details - Details of products sold (with customer data)
+router.get('/analytics/details', async (req, res) => {
     try {
-        // Fetch delivered orders for the shop
-        const orders = await Order.find({ shopId: req.user.id, status: 'Delivered' })
-            .sort({ orderDate: -1 })
-            .lean();
+        const shopId = mongoose.Types.ObjectId(req.user.id);
 
-        // 1. Get all unique customer IDs
-        const customerIds = orders.map(order => order.customerId);
-        
-        // 2. Fetch customer details
-        const customers = await Customer.find({ _id: { $in: customerIds } }, 'name phone');
-        const customerMap = new Map();
-        customers.forEach(c => customerMap.set(c._id.toString(), { name: c.name, phone: c.phone }));
+        const details = await Order.aggregate([
+            { $match: { shopId: shopId, status: "Delivered" } },
+            { $unwind: "$items" },
+            {
+                $lookup: {
+                    from: 'customers', // The target collection name (lowercase and plural)
+                    localField: 'customerId',
+                    foreignField: '_id',
+                    as: 'customerInfo'
+                }
+            },
+            { $unwind: "$customerInfo" },
+            {
+                $project: {
+                    _id: 0,
+                    orderId: "$_id",
+                    productName: "$items.name",
+                    quantity: "$items.quantity",
+                    profit: { $multiply: ["$items.quantity", { $subtract: ["$items.sellingPrice", "$items.costPrice"] }] },
+                    customerName: "$customerInfo.name",
+                    customerPhone: "$customerInfo.phone"
+                }
+            },
+            { $sort: { orderId: -1 } }
+        ]);
 
-        // 3. Flatten and enrich order data
-        let soldDetails = [];
-
-        orders.forEach(order => {
-            const customerInfo = customerMap.get(order.customerId.toString()) || { name: 'N/A', phone: 'N/A' };
-
-            order.items.forEach(item => {
-                const revenue = item.quantity * item.sellingPrice;
-                const cost = item.quantity * item.costPrice;
-                const profit = revenue - cost;
-
-                soldDetails.push({
-                    orderId: order._id,
-                    orderDate: order.orderDate,
-                    productName: item.name,
-                    quantitySold: item.quantity,
-                    sellingPrice: item.sellingPrice,
-                    costPrice: item.costPrice,
-                    revenue: revenue.toFixed(2),
-                    profit: profit.toFixed(2),
-                    customerId: order.customerId,
-                    customerName: customerInfo.name,
-                    customerPhone: customerInfo.phone
-                });
-            });
-        });
-
-        res.json(soldDetails);
-
+        res.json({ success: true, details, message: "Detailed sales data fetched." });
     } catch (error) {
-        console.error("Analytics Details Error:", error.message);
-        res.status(500).json({ message: 'Server error retrieving detailed sales analytics.' });
+        console.error('Error fetching detailed analytics:', error);
+        res.status(500).json({ message: "Server error fetching detailed analytics." });
     }
 });
 
+// --- END SHOP OWNER ROUTES ---
 
 module.exports = router;
