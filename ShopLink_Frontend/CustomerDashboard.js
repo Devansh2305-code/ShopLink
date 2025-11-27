@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useUser } from '../contexts/UserContext';
 import { secureFetch, showMessage } from '../utils';
 import Cart from './Cart';
@@ -71,20 +71,30 @@ function ShopList({ shops, onSelectShop }) {
     return (
         <div className="card bg-white p-6 rounded-xl">
             <h3 className="text-xl font-bold mb-4">Available Shops</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {shops.map(shop => (
-                    <div key={shop._id} className="border p-4 rounded-lg hover:shadow-md cursor-pointer" onClick={() => onSelectShop(shop)}>
-                        <h4 className="font-bold text-lg">{shop.shopName}</h4>
-                        <p className="text-sm text-gray-600">{shop.category}</p>
-                    </div>
-                ))}
-            </div>
+            {shops.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {shops.map(shop => (
+                        <div key={shop._id} className="border p-4 rounded-lg hover:shadow-md cursor-pointer" onClick={() => onSelectShop(shop)}>
+                            <h4 className="font-bold text-lg">{shop.shopName}</h4>
+                            <p className="text-sm text-gray-600">{shop.category}</p>
+                        </div>
+                    ))}
+                </div>
+            ) : (
+                <p className="text-gray-500">No shops are available at the moment.</p>
+            )}
         </div>
     );
 }
 
 function ProductList({ products, selectedShop, onBack, isLoading }) {
     const { addToCart } = useUser();
+
+    // Use useCallback to memoize the handler function.
+    // This prevents creating a new function on every render for the onClick prop.
+    const handleAddToCart = useCallback((product) => {
+        addToCart(product, selectedShop);
+    }, [addToCart, selectedShop]);
 
     return (
         <div className="card bg-white p-6 rounded-xl">
@@ -94,7 +104,7 @@ function ProductList({ products, selectedShop, onBack, isLoading }) {
             </div>
             {isLoading ? (
                 <div>Loading products...</div>
-            ) : (
+            ) : products.length > 0 ? (
                 <div className="space-y-4">
                     {products.map(product => (
                         <div key={product._id} className="flex justify-between items-center border-b pb-2">
@@ -102,10 +112,12 @@ function ProductList({ products, selectedShop, onBack, isLoading }) {
                                 <h4 className="font-semibold">{product.name}</h4>
                                 <p className="text-gray-700">₹{product.price}</p>
                             </div>
-                            <button onClick={() => addToCart(product, selectedShop)} className="btn-primary px-3 py-1">Add to Cart</button>
+                            <button onClick={() => handleAddToCart(product)} className="btn-primary px-3 py-1">Add to Cart</button>
                         </div>
                     ))}
                 </div>
+            ) : (
+                <p className="text-gray-500">This shop has no products listed yet.</p>
             )}
         </div>
     );
@@ -113,10 +125,10 @@ function ProductList({ products, selectedShop, onBack, isLoading }) {
 
 export default CustomerDashboard;
 
-```
+// ```
 
-#### `c:/Users/gaura/OneDrive/文档/GitHub/ShopLink/ShopLink_Frontend/components/Cart.js`
+// #### `c:/Users/gaura/OneDrive/文档/GitHub/ShopLink/ShopLink_Frontend/components/Cart.js`
 
-This component will display the cart's contents and total.
+// This component will display the cart's contents and total.
 
-```diff
+// ```diff
